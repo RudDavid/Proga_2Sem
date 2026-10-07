@@ -23,7 +23,7 @@
     /// содержимое этого метода с помощью редактора кода.
     /// </summary>
     private void InitializeComponent() {
-      System.Windows.Forms.DataVisualization.Charting.ChartArea chartArea1 = new System.Windows.Forms.DataVisualization.Charting.ChartArea();
+      System.Windows.Forms.DataVisualization.Charting.ChartArea chartArea5 = new System.Windows.Forms.DataVisualization.Charting.ChartArea();
       this.sortingShow = new System.Windows.Forms.DataGridView();
       this.ValueColumn = new System.Windows.Forms.DataGridViewTextBoxColumn();
       this.textBox1 = new System.Windows.Forms.TextBox();
@@ -38,15 +38,17 @@
       this.управлениеToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
       this.рассчитатьToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
       this.очиститьToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+      this.импортToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+      this.importFromExcelToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+      this.importFromGoogleSheetsToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
       this.dataGridViewResults = new System.Windows.Forms.DataGridView();
       this.AlgorithmColumn = new System.Windows.Forms.DataGridViewTextBoxColumn();
       this.TimeColumn = new System.Windows.Forms.DataGridViewTextBoxColumn();
       this.checkBoxReverse = new System.Windows.Forms.CheckBox();
       this.label1 = new System.Windows.Forms.Label();
-      this.импортToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
-      this.importFromExcelToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
-      this.importFromGoogleSheetsToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
       this.groupBox1 = new System.Windows.Forms.GroupBox();
+      this.stopButton = new System.Windows.Forms.ToolStripMenuItem();
+      this.colIterations = new System.Windows.Forms.DataGridViewTextBoxColumn();
       ((System.ComponentModel.ISupportInitialize)(this.sortingShow)).BeginInit();
       ((System.ComponentModel.ISupportInitialize)(this.chartVisualizer)).BeginInit();
       this.menuStrip1.SuspendLayout();
@@ -67,6 +69,7 @@
       this.sortingShow.Size = new System.Drawing.Size(103, 161);
       this.sortingShow.TabIndex = 0;
       this.sortingShow.CellContentClick += new System.Windows.Forms.DataGridViewCellEventHandler(this.sortingShow_CellContentClick);
+      this.sortingShow.RowsAdded += new System.Windows.Forms.DataGridViewRowsAddedEventHandler(this.sortingShow_RowsAdded);
       // 
       // ValueColumn
       // 
@@ -100,8 +103,8 @@
       this.chartVisualizer.Anchor = ((System.Windows.Forms.AnchorStyles)((((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Bottom) 
             | System.Windows.Forms.AnchorStyles.Left) 
             | System.Windows.Forms.AnchorStyles.Right)));
-      chartArea1.Name = "ChartArea1";
-      this.chartVisualizer.ChartAreas.Add(chartArea1);
+      chartArea5.Name = "ChartArea1";
+      this.chartVisualizer.ChartAreas.Add(chartArea5);
       this.chartVisualizer.Location = new System.Drawing.Point(380, 40);
       this.chartVisualizer.Name = "chartVisualizer";
       this.chartVisualizer.Size = new System.Drawing.Size(440, 260);
@@ -173,7 +176,8 @@
       // 
       this.управлениеToolStripMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[] {
             this.рассчитатьToolStripMenuItem,
-            this.очиститьToolStripMenuItem});
+            this.очиститьToolStripMenuItem,
+            this.stopButton});
       this.управлениеToolStripMenuItem.Name = "управлениеToolStripMenuItem";
       this.управлениеToolStripMenuItem.Size = new System.Drawing.Size(85, 20);
       this.управлениеToolStripMenuItem.Text = "Управление";
@@ -192,6 +196,29 @@
       this.очиститьToolStripMenuItem.Text = "Очистить";
       this.очиститьToolStripMenuItem.Click += new System.EventHandler(this.очиститьToolStripMenuItem_Click);
       // 
+      // импортToolStripMenuItem
+      // 
+      this.импортToolStripMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[] {
+            this.importFromExcelToolStripMenuItem,
+            this.importFromGoogleSheetsToolStripMenuItem});
+      this.импортToolStripMenuItem.Name = "импортToolStripMenuItem";
+      this.импортToolStripMenuItem.Size = new System.Drawing.Size(63, 20);
+      this.импортToolStripMenuItem.Text = "Импорт";
+      // 
+      // importFromExcelToolStripMenuItem
+      // 
+      this.importFromExcelToolStripMenuItem.Name = "importFromExcelToolStripMenuItem";
+      this.importFromExcelToolStripMenuItem.Size = new System.Drawing.Size(149, 22);
+      this.importFromExcelToolStripMenuItem.Text = "Exel файл";
+      this.importFromExcelToolStripMenuItem.Click += new System.EventHandler(this.importFromExcelToolStripMenuItem_Click);
+      // 
+      // importFromGoogleSheetsToolStripMenuItem
+      // 
+      this.importFromGoogleSheetsToolStripMenuItem.Name = "importFromGoogleSheetsToolStripMenuItem";
+      this.importFromGoogleSheetsToolStripMenuItem.Size = new System.Drawing.Size(149, 22);
+      this.importFromGoogleSheetsToolStripMenuItem.Text = "Google Sheets";
+      this.importFromGoogleSheetsToolStripMenuItem.Click += new System.EventHandler(this.importFromGoogleSheetsToolStripMenuItem_Click);
+      // 
       // dataGridViewResults
       // 
       this.dataGridViewResults.AllowUserToAddRows = false;
@@ -200,14 +227,15 @@
       this.dataGridViewResults.ColumnHeadersHeightSizeMode = System.Windows.Forms.DataGridViewColumnHeadersHeightSizeMode.AutoSize;
       this.dataGridViewResults.Columns.AddRange(new System.Windows.Forms.DataGridViewColumn[] {
             this.AlgorithmColumn,
-            this.TimeColumn});
+            this.TimeColumn,
+            this.colIterations});
       this.dataGridViewResults.Location = new System.Drawing.Point(18, 226);
       this.dataGridViewResults.MultiSelect = false;
       this.dataGridViewResults.Name = "dataGridViewResults";
       this.dataGridViewResults.ReadOnly = true;
       this.dataGridViewResults.RowHeadersVisible = false;
       this.dataGridViewResults.SelectionMode = System.Windows.Forms.DataGridViewSelectionMode.FullRowSelect;
-      this.dataGridViewResults.Size = new System.Drawing.Size(204, 222);
+      this.dataGridViewResults.Size = new System.Drawing.Size(304, 222);
       this.dataGridViewResults.TabIndex = 6;
       this.dataGridViewResults.CellContentClick += new System.Windows.Forms.DataGridViewCellEventHandler(this.dataGridViewResults_CellContentClick);
       // 
@@ -242,29 +270,6 @@
       this.label1.TabIndex = 8;
       this.label1.Text = "Введите число элементов";
       // 
-      // импортToolStripMenuItem
-      // 
-      this.импортToolStripMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[] {
-            this.importFromExcelToolStripMenuItem,
-            this.importFromGoogleSheetsToolStripMenuItem});
-      this.импортToolStripMenuItem.Name = "импортToolStripMenuItem";
-      this.импортToolStripMenuItem.Size = new System.Drawing.Size(63, 20);
-      this.импортToolStripMenuItem.Text = "Импорт";
-      // 
-      // importFromExcelToolStripMenuItem
-      // 
-      this.importFromExcelToolStripMenuItem.Name = "importFromExcelToolStripMenuItem";
-      this.importFromExcelToolStripMenuItem.Size = new System.Drawing.Size(180, 22);
-      this.importFromExcelToolStripMenuItem.Text = "Exel файл";
-      this.importFromExcelToolStripMenuItem.Click += new System.EventHandler(this.importFromExcelToolStripMenuItem_Click);
-      // 
-      // importFromGoogleSheetsToolStripMenuItem
-      // 
-      this.importFromGoogleSheetsToolStripMenuItem.Name = "importFromGoogleSheetsToolStripMenuItem";
-      this.importFromGoogleSheetsToolStripMenuItem.Size = new System.Drawing.Size(180, 22);
-      this.importFromGoogleSheetsToolStripMenuItem.Text = "Google Sheets";
-      this.importFromGoogleSheetsToolStripMenuItem.Click += new System.EventHandler(this.importFromGoogleSheetsToolStripMenuItem_Click);
-      // 
       // groupBox1
       // 
       this.groupBox1.Controls.Add(this.checkBoxBubble);
@@ -278,6 +283,19 @@
       this.groupBox1.TabIndex = 9;
       this.groupBox1.TabStop = false;
       this.groupBox1.Text = "Алгоритмы";
+      // 
+      // stopButton
+      // 
+      this.stopButton.Name = "stopButton";
+      this.stopButton.Size = new System.Drawing.Size(180, 22);
+      this.stopButton.Text = "Остановить";
+      this.stopButton.Click += new System.EventHandler(this.stopButton_Click);
+      // 
+      // colIterations
+      // 
+      this.colIterations.HeaderText = "Кол-во итераций";
+      this.colIterations.Name = "colIterations";
+      this.colIterations.ReadOnly = true;
       // 
       // Form1
       // 
@@ -333,6 +351,8 @@
     private System.Windows.Forms.ToolStripMenuItem importFromExcelToolStripMenuItem;
     private System.Windows.Forms.ToolStripMenuItem importFromGoogleSheetsToolStripMenuItem;
     private System.Windows.Forms.GroupBox groupBox1;
+    private System.Windows.Forms.ToolStripMenuItem stopButton;
+    private System.Windows.Forms.DataGridViewTextBoxColumn colIterations;
   }
 }
 

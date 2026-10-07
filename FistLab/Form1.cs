@@ -1,8 +1,10 @@
 ﻿using ClosedXML.Excel;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
@@ -11,16 +13,40 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using System.Windows.Forms.DataVisualization.Charting;
-using System.Xml.XPath;
 
 namespace FistLab {
   public partial class Form1 : Form {
 
+    // ============================================================
+    // ПОЛЯ КЛАССА
+    // ============================================================
+
     // Флаг направления сортировки (true = по убыванию)
     private bool _sortDescending = false;
 
+    // Источник отмены для всех параллельных сортировок
+    private CancellationTokenSource _cts;
+
+    // Флаг «идёт сортировка прямо сейчас»
+    private volatile bool _isSorting = false;
+
     public Form1() {
       InitializeComponent();
+
+      // Останавливаем все фоновые задачи при закрытии формы
+      this.FormClosing += Form1_FormClosing;
+
+      // Заглушка на графике до запуска
+      chartVisualizer.Titles.Clear();
+      chartVisualizer.Titles.Add("Нажмите «Сгенерировать», затем «Рассчитать»");
+      chartVisualizer.Titles[0].Font = new Font("Segoe UI", 11, FontStyle.Italic);
+      chartVisualizer.Titles[0].ForeColor = Color.Gray;
+    }
+
+    private void Form1_FormClosing(object sender, FormClosingEventArgs e) {
+      if (_isSorting) {
+        _cts?.Cancel();
+      }
     }
 
     // ============================================================
@@ -30,14 +56,25 @@ namespace FistLab {
     /// <summary>
     /// Определяет, нужно ли менять местами два элемента с учётом направления сортировки.
     /// </summary>
-    private bool NeedSwap(int a, int b) {
+    private bool NeedSwap(double a, double b) {
       return _sortDescending ? a < b : a > b;
+    }
+
+    /// <summary>
+    /// Парсит строку в double, принимая и точку, и запятую как разделитель.
+    /// </summary>
+    private bool TryParseDouble(string text, out double result) {
+      text = text.Trim().Replace(',', '.');
+      return double.TryParse(text,
+        NumberStyles.Any,
+        CultureInfo.InvariantCulture,
+        out result);
     }
 
     /// <summary>
     /// Заполняет DataGridView числами и синхронизирует textBox1.
     /// </summary>
-    private void FillGridWithNumbers(List<int> numbers) {
+    private void FillGridWithNumbers(List<double> numbers) {
       sortingShow.Rows.Clear();
       chartVisualizer.Series.Clear();
       sortingShow.AllowUserToAddRows = true;
@@ -58,7 +95,7 @@ namespace FistLab {
     // ГЕНЕРАЦИЯ СЛУЧАЙНЫХ ЧИСЕЛ
     // ============================================================
 
-    private void randomGeneric_Click(object sender, System.EventArgs e) {
+    private void randomGeneric_Click(object sender, EventArgs e) {
       if (!int.TryParse(textBox1.Text, out int value) || value <= 0 || value > 100) {
         MessageBox.Show("Пожалуйста, введите корректное число элементов до 100 штук.",
           "Ошибка ввода", MessageBoxButtons.OK, MessageBoxIcon.Warning);
@@ -66,11 +103,11 @@ namespace FistLab {
       }
 
       sortingShow.Rows.Clear();
-
       Random random = new Random();
 
       for (int indexI = 0; indexI < value; ++indexI) {
-        int randomNum = random.Next(1, 101);
+        // От 1.00 до 100.00 с двумя знаками после запятой
+        double randomNum = Math.Round(random.NextDouble() * 99.0 + 1.0, 2);
         int rowIndex = sortingShow.Rows.Add();
         sortingShow.Rows[rowIndex].Cells[0].Value = randomNum;
       }
@@ -86,7 +123,8 @@ namespace FistLab {
     // ИНИЦИАЛИЗАЦИЯ ГРАФИКА
     // ============================================================
 
-    private void InitializeChartForSelectedAlgorithms(int[] baseDataArray) {
+    private void InitializeChartForSelectedAlgorithms(double[] baseDataArray) {
+      chartVisualizer.Titles.Clear();
       chartVisualizer.Series.Clear();
 
       var algorithmSettings = new[]
@@ -113,15 +151,27 @@ namespace FistLab {
       }
     }
 
-    private void UpdateChartPoint(string seriesName, int pointIndex, int newValue) {
-      if (this.InvokeRequired) {
-        this.Invoke((MethodInvoker)delegate { UpdateChartPoint(seriesName, pointIndex, newValue); });
-        return;
-      }
+    private void UpdateChartPoint(string seriesName, int pointIndex, double newValue) {
+      // Если форма уже уничтожается/уничтожена — молча выходим
+      if (this.IsDisposed || this.Disposing) return;
 
-      if (chartVisualizer.Series.FindByName(seriesName) != null) {
-        chartVisualizer.Series[seriesName].Points[pointIndex].SetValueY(newValue);
-        chartVisualizer.Refresh();
+      try {
+        if (this.InvokeRequired) {
+          this.Invoke((MethodInvoker)delegate { UpdateChartPoint(seriesName, pointIndex, newValue); });
+          return;
+        }
+
+        if (chartVisualizer.IsDisposed) return;
+
+        var series = chartVisualizer.Series.FindByName(seriesName);
+        if (series != null && pointIndex >= 0 && pointIndex < series.Points.Count) {
+          series.Points[pointIndex].SetValueY(newValue);
+          chartVisualizer.Refresh();
+        }
+      } catch (ObjectDisposedException) {
+        // Форма закрылась во время обновления — игнорируем
+      } catch (InvalidOperationException) {
+        // Контрол уже удалён — игнорируем
       }
     }
 
@@ -129,13 +179,17 @@ namespace FistLab {
     // АЛГОРИТМЫ СОРТИРОВКИ С ВИЗУАЛИЗАЦИЕЙ
     // ============================================================
 
-    public void VisualBubbleSort(int[] dataArray, string seriesName) {
+    public void VisualBubbleSort(double[] dataArray, string seriesName,
+                                 CancellationToken ct, Action onIteration) {
       int arrayLength = dataArray.Length;
 
       for (int currentPass = 0; currentPass < arrayLength - 1; currentPass++) {
         for (int elementIndex = 0; elementIndex < arrayLength - currentPass - 1; elementIndex++) {
+          ct.ThrowIfCancellationRequested();
+          onIteration();
+
           if (NeedSwap(dataArray[elementIndex], dataArray[elementIndex + 1])) {
-            int temporaryValue = dataArray[elementIndex];
+            double temporaryValue = dataArray[elementIndex];
             dataArray[elementIndex] = dataArray[elementIndex + 1];
             dataArray[elementIndex + 1] = temporaryValue;
 
@@ -147,33 +201,48 @@ namespace FistLab {
       }
     }
 
-    public void VisualInsertionSort(int[] dataArray, string seriesName, int sleepTimeout) {
+    public void VisualInsertionSort(double[] dataArray, string seriesName,
+                                    int sleepTimeout, CancellationToken ct, Action onIteration) {
       int arrayLength = dataArray.Length;
 
       for (int currentStep = 1; currentStep < arrayLength; currentStep++) {
-        int keyElement = dataArray[currentStep];
+        ct.ThrowIfCancellationRequested();
+
+        double keyElement = dataArray[currentStep];
         int previousIndex = currentStep - 1;
 
-        while (previousIndex >= 0 && NeedSwap(dataArray[previousIndex], keyElement)) {
+        while (previousIndex >= 0) {
+          ct.ThrowIfCancellationRequested();
+          onIteration();
+
+          if (!NeedSwap(dataArray[previousIndex], keyElement)) break;
+
           dataArray[previousIndex + 1] = dataArray[previousIndex];
           UpdateChartPoint(seriesName, previousIndex + 1, dataArray[previousIndex + 1]);
           Thread.Sleep(sleepTimeout);
           previousIndex = previousIndex - 1;
         }
+
         dataArray[previousIndex + 1] = keyElement;
         UpdateChartPoint(seriesName, previousIndex + 1, dataArray[previousIndex + 1]);
         Thread.Sleep(sleepTimeout);
       }
     }
 
-    public void VisualShakerSort(int[] dataArray, string seriesName, int sleepTimeout) {
+    public void VisualShakerSort(double[] dataArray, string seriesName,
+                                 int sleepTimeout, CancellationToken ct, Action onIteration) {
       int leftBoundary = 0;
       int rightBoundary = dataArray.Length - 1;
 
       while (leftBoundary <= rightBoundary) {
+        ct.ThrowIfCancellationRequested();
+
         for (int scanIndex = leftBoundary; scanIndex < rightBoundary; scanIndex++) {
+          ct.ThrowIfCancellationRequested();
+          onIteration();
+
           if (NeedSwap(dataArray[scanIndex], dataArray[scanIndex + 1])) {
-            int temporaryValue = dataArray[scanIndex];
+            double temporaryValue = dataArray[scanIndex];
             dataArray[scanIndex] = dataArray[scanIndex + 1];
             dataArray[scanIndex + 1] = temporaryValue;
 
@@ -185,8 +254,11 @@ namespace FistLab {
         rightBoundary--;
 
         for (int scanIndex = rightBoundary; scanIndex > leftBoundary; scanIndex--) {
+          ct.ThrowIfCancellationRequested();
+          onIteration();
+
           if (NeedSwap(dataArray[scanIndex - 1], dataArray[scanIndex])) {
-            int temporaryValue = dataArray[scanIndex];
+            double temporaryValue = dataArray[scanIndex];
             dataArray[scanIndex] = dataArray[scanIndex - 1];
             dataArray[scanIndex - 1] = temporaryValue;
 
@@ -199,28 +271,37 @@ namespace FistLab {
       }
     }
 
-    public void VisualQuickSort(int[] dataArray, int startingIndex, int endingIndex, string seriesName, int sleepTimeout) {
-      if (startingIndex < endingIndex) {
-        int pivotIndex = PartitionArrayVisual(dataArray, startingIndex, endingIndex, seriesName, sleepTimeout);
+    public void VisualQuickSort(double[] dataArray, int startingIndex, int endingIndex,
+                                string seriesName, int sleepTimeout,
+                                CancellationToken ct, Action onIteration) {
+      ct.ThrowIfCancellationRequested();
 
-        VisualQuickSort(dataArray, startingIndex, pivotIndex - 1, seriesName, sleepTimeout);
-        VisualQuickSort(dataArray, pivotIndex + 1, endingIndex, seriesName, sleepTimeout);
+      if (startingIndex < endingIndex) {
+        int pivotIndex = PartitionArrayVisual(dataArray, startingIndex, endingIndex,
+                                              seriesName, sleepTimeout, ct, onIteration);
+
+        VisualQuickSort(dataArray, startingIndex, pivotIndex - 1, seriesName, sleepTimeout, ct, onIteration);
+        VisualQuickSort(dataArray, pivotIndex + 1, endingIndex, seriesName, sleepTimeout, ct, onIteration);
       }
     }
 
-    private int PartitionArrayVisual(int[] dataArray, int startingIndex, int endingIndex, string seriesName, int sleepTimeout) {
-      int pivotValue = dataArray[endingIndex];
+    private int PartitionArrayVisual(double[] dataArray, int startingIndex, int endingIndex,
+                                     string seriesName, int sleepTimeout,
+                                     CancellationToken ct, Action onIteration) {
+      double pivotValue = dataArray[endingIndex];
       int smallerElementIndex = startingIndex - 1;
 
       for (int currentIndex = startingIndex; currentIndex < endingIndex; currentIndex++) {
-        // Для сортировки по убыванию элементы "больше" опорного идут влево
+        ct.ThrowIfCancellationRequested();
+        onIteration();
+
         bool shouldMoveLeft = _sortDescending
           ? dataArray[currentIndex] > pivotValue
           : dataArray[currentIndex] < pivotValue;
 
         if (shouldMoveLeft) {
           smallerElementIndex++;
-          int temporaryValue = dataArray[smallerElementIndex];
+          double temporaryValue = dataArray[smallerElementIndex];
           dataArray[smallerElementIndex] = dataArray[currentIndex];
           dataArray[currentIndex] = temporaryValue;
 
@@ -231,7 +312,7 @@ namespace FistLab {
       }
 
       int finalPivotPlaceIndex = smallerElementIndex + 1;
-      int temporaryPivotValue = dataArray[finalPivotPlaceIndex];
+      double temporaryPivotValue = dataArray[finalPivotPlaceIndex];
       dataArray[finalPivotPlaceIndex] = dataArray[endingIndex];
       dataArray[endingIndex] = temporaryPivotValue;
 
@@ -242,19 +323,24 @@ namespace FistLab {
       return finalPivotPlaceIndex;
     }
 
-    public void VisualBogoSort(int[] dataArray, string seriesName, int sleepTimeout) {
+    public void VisualBogoSort(double[] dataArray, string seriesName,
+                               int sleepTimeout, CancellationToken ct, Action onIteration) {
       Random randomGenerator = new Random();
 
       Stopwatch bogoTimer = Stopwatch.StartNew();
       long timeLimitMilliseconds = 5000;
 
       while (!CheckIfArrayIsSorted(dataArray)) {
+        ct.ThrowIfCancellationRequested();
+        onIteration();
+
         if (bogoTimer.ElapsedMilliseconds >= timeLimitMilliseconds) {
           bogoTimer.Stop();
 
           this.Invoke((MethodInvoker)delegate {
             MessageBox.Show(
-              $"Время выполнения BOGO Sort превысило лимит в {timeLimitMilliseconds / 1000} секунд! Алгоритм был принудительно остановлен.",
+              $"Время выполнения BOGO Sort превысило лимит в {timeLimitMilliseconds / 1000} секунд! " +
+              "Алгоритм был принудительно остановлен.",
               "Превышен лимит времени", MessageBoxButtons.OK, MessageBoxIcon.Warning);
           });
 
@@ -264,7 +350,7 @@ namespace FistLab {
         for (int currentIndex = dataArray.Length - 1; currentIndex > 0; currentIndex--) {
           int randomIndex = randomGenerator.Next(currentIndex + 1);
 
-          int temporaryValue = dataArray[currentIndex];
+          double temporaryValue = dataArray[currentIndex];
           dataArray[currentIndex] = dataArray[randomIndex];
           dataArray[randomIndex] = temporaryValue;
         }
@@ -282,7 +368,7 @@ namespace FistLab {
     /// <summary>
     /// Проверяет корректность порядка элементов с учётом направления сортировки.
     /// </summary>
-    private bool CheckIfArrayIsSorted(int[] dataArray) {
+    private bool CheckIfArrayIsSorted(double[] dataArray) {
       for (int currentIndex = 0; currentIndex < dataArray.Length - 1; currentIndex++) {
         if (NeedSwap(dataArray[currentIndex], dataArray[currentIndex + 1])) {
           return false;
@@ -295,9 +381,9 @@ namespace FistLab {
     // ПОЛУЧЕНИЕ МАССИВА ИЗ ТАБЛИЦЫ
     // ============================================================
 
-    private int[] GetArrayFromGrid() {
+    private double[] GetArrayFromGrid() {
       if (sortingShow.Rows.Count == 0) {
-        return new int[0];
+        return new double[0];
       }
 
       int rowsCount = sortingShow.AllowUserToAddRows
@@ -305,25 +391,26 @@ namespace FistLab {
         : sortingShow.Rows.Count;
 
       if (rowsCount <= 0) {
-        return new int[0];
+        return new double[0];
       }
 
-      List<int> validNumbersList = new List<int>();
+      List<double> validNumbersList = new List<double>();
 
       for (int index = 0; index < rowsCount; index++) {
         object cellValue = sortingShow.Rows[index].Cells[0].Value;
 
         if (cellValue == null || string.IsNullOrWhiteSpace(cellValue.ToString())) {
           MessageBox.Show(
-            $"Строка №{index + 1} пуста или содержит некорректные данные. Пожалуйста, заполните её целым числом или удалите строку.",
-            "Ошибка валидации данных", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            $"Строка №{index + 1} пуста. Введите число (например, 5 или 3,14) или удалите строку.",
+            "Ошибка данных", MessageBoxButtons.OK, MessageBoxIcon.Error);
           return null;
         }
 
-        if (!int.TryParse(cellValue.ToString().Trim(), out int validNumber)) {
+        if (!TryParseDouble(cellValue.ToString(), out double validNumber)) {
           MessageBox.Show(
-            $"В строке №{index + 1} обнаружено недопустимое значение '{cellValue}'. Допускаются только целые числа!",
-            "Ошибка валидации данных", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            $"В строке №{index + 1} значение '{cellValue}' не является числом.\n" +
+            "Допускаются целые и дробные числа (5, 3.14, -2.5).",
+            "Ошибка данных", MessageBoxButtons.OK, MessageBoxIcon.Error);
           return null;
         }
 
@@ -343,6 +430,12 @@ namespace FistLab {
       textBox1.Clear();
       sortingShow.AllowUserToAddRows = true;
 
+      // Возвращаем заглушку на график
+      chartVisualizer.Titles.Clear();
+      chartVisualizer.Titles.Add("Нажмите «Сгенерировать», затем «Рассчитать»");
+      chartVisualizer.Titles[0].Font = new Font("Segoe UI", 11, FontStyle.Italic);
+      chartVisualizer.Titles[0].ForeColor = Color.Gray;
+
       MessageBox.Show("Все данные и графики успешно очищены!", "Сброс",
         MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
@@ -359,36 +452,31 @@ namespace FistLab {
         if (ofd.ShowDialog() != DialogResult.OK) return;
 
         try {
-          List<int> numbers = new List<int>();
+          List<double> numbers = new List<double>();
 
           using (var workbook = new XLWorkbook(ofd.FileName)) {
             var worksheet = workbook.Worksheets.First();
             var usedRange = worksheet.RangeUsed();
 
-            // --- ПРОВЕРКА 1: файл/лист пустой ---
             if (usedRange == null) {
               MessageBox.Show("Файл пуст — ни одной заполненной ячейки.",
                 "Пустой файл", MessageBoxButtons.OK, MessageBoxIcon.Warning);
               return;
             }
 
-            // Проходим по всем строкам и всем ячейкам в каждой строке
             foreach (var row in usedRange.RowsUsed()) {
               foreach (var cell in row.CellsUsed()) {
-                // --- ПРОВЕРКА 2: не число ---
                 if (cell.TryGetValue<double>(out double dbl)) {
-                  numbers.Add((int)dbl);
+                  numbers.Add(dbl);
                 } else {
                   string text = cell.GetString().Trim();
 
-                  // Пустая ячейка — молча пропускаем
                   if (string.IsNullOrWhiteSpace(text)) continue;
 
-                  // Не число — предупреждаем и останавливаемся
-                  if (!int.TryParse(text, out int parsed)) {
+                  if (!TryParseDouble(text, out double parsed)) {
                     MessageBox.Show(
                       $"Ячейка {cell.Address} содержит недопустимое значение: '{text}'.\n" +
-                      "Допускаются только целые числа.",
+                      "Допускаются только числа (целые или дробные).",
                       "Ошибка данных", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     return;
                   }
@@ -398,7 +486,6 @@ namespace FistLab {
             }
           }
 
-          // --- ПРОВЕРКА 3: массив пустой ---
           if (numbers.Count == 0) {
             MessageBox.Show("В файле не найдено ни одного числа.",
               "Пустой массив", MessageBoxButtons.OK, MessageBoxIcon.Warning);
@@ -450,7 +537,7 @@ namespace FistLab {
           client.Timeout = TimeSpan.FromSeconds(20);
           string csv = await client.GetStringAsync(csvUrl);
 
-          List<int> numbers;
+          List<double> numbers;
           try {
             numbers = ParseCsvAllFields(csv);
           } catch (FormatException fex) {
@@ -459,17 +546,10 @@ namespace FistLab {
             return;
           }
 
-          // --- ПРОВЕРКА: пустой массив ---
           if (numbers.Count == 0) {
-            MessageBox.Show("В таблице не найдено ни одного числа.",
-              "Пустой массив", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            return;
-          }
-
-          if (numbers.Count == 0) {
-            MessageBox.Show("Не найдено числовых данных в первом столбце.\n\n" +
+            MessageBox.Show("В таблице не найдено ни одного числа.\n\n" +
               "Проверьте, что таблица опубликована: Файл → Поделиться → Доступ по ссылке.",
-              "Нет данных", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+              "Пустой массив", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
           }
 
@@ -497,12 +577,15 @@ namespace FistLab {
     /// Конвертирует обычную ссылку Google Sheets в ссылку CSV-экспорта.
     /// </summary>
     private string ConvertToCsvExportUrl(string url) {
-      if (url.Contains("export?format=csv") || url.EndsWith(".csv"))
+      if (url.Contains("export?format=csv") ||
+          url.Contains("output=csv") ||
+          url.EndsWith(".csv"))
         return url;
 
       var match = Regex.Match(url, @"/spreadsheets/d/([a-zA-Z0-9-_]+)");
       if (!match.Success)
-        throw new ArgumentException("Не удалось распознать ID таблицы в ссылке. Убедитесь, что ссылка ведёт на Google Sheets.");
+        throw new ArgumentException(
+          "Не удалось распознать ID таблицы в ссылке. Убедитесь, что ссылка ведёт на Google Sheets.");
 
       string id = match.Groups[1].Value;
 
@@ -513,9 +596,12 @@ namespace FistLab {
       return $"https://docs.google.com/spreadsheets/d/{id}/export?format=csv&gid={gid}";
     }
 
-    /// Парсит CSV и вытаскивает числовые значения из первого столбца.
-    private List<int> ParseCsvAllFields(string csv) {
-      List<int> result = new List<int>();
+    /// <summary>
+    /// Парсит CSV целиком (все строки × все столбцы) и возвращает все числа.
+    /// Бросает FormatException, если встретит нечисловое значение.
+    /// </summary>
+    private List<double> ParseCsvAllFields(string csv) {
+      List<double> result = new List<double>();
       int lineNumber = 0;
 
       using (var reader = new StringReader(csv)) {
@@ -524,7 +610,6 @@ namespace FistLab {
           lineNumber++;
           if (string.IsNullOrWhiteSpace(line)) continue;
 
-          // Разбор строки CSV с учётом кавычек
           var fields = new List<string>();
           bool inQuotes = false;
           var current = new System.Text.StringBuilder();
@@ -533,7 +618,6 @@ namespace FistLab {
             char c = line[i];
 
             if (c == '"') {
-              // Двойная кавычка внутри кавычек — экранирование
               if (inQuotes && i + 1 < line.Length && line[i + 1] == '"') {
                 current.Append('"');
                 i++;
@@ -549,25 +633,17 @@ namespace FistLab {
           }
           fields.Add(current.ToString());
 
-          // Обработка каждой ячейки в строке
           foreach (var field in fields) {
             string trimmed = field.Trim();
 
-            // Пустая ячейка — пропускаем
             if (string.IsNullOrWhiteSpace(trimmed)) continue;
 
-            if (int.TryParse(trimmed, out int num)) {
+            if (TryParseDouble(trimmed, out double num)) {
               result.Add(num);
-            } else if (double.TryParse(trimmed,
-                         System.Globalization.NumberStyles.Any,
-                         System.Globalization.CultureInfo.InvariantCulture,
-                         out double dbl)) {
-              // Десятичные — округляем
-              result.Add((int)dbl);
             } else {
               throw new FormatException(
-                $"Строка {lineNumber}: недопустимое значение '{trimmed}'.\n" +
-                "Допускаются только числа.");
+                $"Строка {lineNumber}: '{trimmed}' не является числом.\n" +
+                "Допускаются целые и дробные числа.");
             }
           }
         }
@@ -577,11 +653,29 @@ namespace FistLab {
     }
 
     // ============================================================
+    // КНОПКА ПРИНУДИТЕЛЬНОЙ ОСТАНОВКИ
+    // ============================================================
+
+    private void stopButton_Click(object sender, EventArgs e) {
+      if (_cts != null && !_cts.IsCancellationRequested) {
+        _cts.Cancel();
+        stopButton.Enabled = false;
+      }
+    }
+
+    // ============================================================
     // ГЛАВНЫЙ ЗАПУСК СОРТИРОВОК
     // ============================================================
 
     private async void рассчитатьToolStripMenuItem_Click(object sender, EventArgs e) {
-      int[] originalArray = GetArrayFromGrid();
+      // Нельзя запускать, пока предыдущая сортировка идёт
+      if (_isSorting) {
+        MessageBox.Show("Сортировка уже выполняется. Нажмите «Стоп» или дождитесь окончания.",
+          "Идёт сортировка", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        return;
+      }
+
+      double[] originalArray = GetArrayFromGrid();
       if (originalArray == null) return;
 
       if (originalArray.Length == 0) {
@@ -598,7 +692,7 @@ namespace FistLab {
       if (checkBoxBogo.Checked) ++selectedAlgorithmsCount;
 
       if (selectedAlgorithmsCount == 0) {
-        MessageBox.Show("Пожалуйста, выберите хотя бы один алгоритм сортировки с помощью чекбоксов!",
+        MessageBox.Show("Пожалуйста, выберите хотя бы один алгоритм сортировки!",
           "Алгоритмы не выбраны", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         return;
       }
@@ -615,96 +709,163 @@ namespace FistLab {
         if (dialogResult == DialogResult.No) return;
       }
 
-      // Устанавливаем направление сортировки из чекбокса
+      // Направление сортировки
       _sortDescending = checkBoxReverse.Checked;
 
+      // Готовим токен отмены
+      _cts?.Dispose();
+      _cts = new CancellationTokenSource();
+      var token = _cts.Token;
+
+      // Блокируем интерфейс, включаем «Стоп»
+      _isSorting = true;
       sortingShow.Enabled = false;
       textBox1.Enabled = false;
       randomGeneric.Enabled = false;
+      stopButton.Enabled = true;
 
       InitializeChartForSelectedAlgorithms(originalArray);
 
       int animationSpeedTimeout = 50;
 
       List<Task> sortingTasks = new List<Task>();
-      Dictionary<string, double> executionTimesReport = new Dictionary<string, double>();
+      var executionTimesReport = new ConcurrentDictionary<string, double>();
+      var iterationReport = new ConcurrentDictionary<string, long>();
 
-      // --- ПАРАЛЛЕЛЬНЫЙ ЗАПУСК СОРТИРОВОК С ЗАМЕРАМИ ВРЕМЕНИ ---
+      // --- ЗАПУСК ВСЕХ ВЫБРАННЫХ СОРТИРОВОК ---
 
       if (checkBoxBubble.Checked) {
-        int[] bubbleSortArray = (int[])originalArray.Clone();
+        double[] arr = (double[])originalArray.Clone();
+        long iterations = 0;
         sortingTasks.Add(Task.Run(() => {
-          TimeSpan startProcessorTime = Process.GetCurrentProcess().TotalProcessorTime;
-          VisualBubbleSort(bubbleSortArray, "Пузырьковая");
-          TimeSpan endProcessorTime = Process.GetCurrentProcess().TotalProcessorTime;
-          executionTimesReport["Пузырьковая"] = (endProcessorTime - startProcessorTime).TotalMilliseconds;
-        }));
+          var start = Process.GetCurrentProcess().TotalProcessorTime;
+          try {
+            VisualBubbleSort(arr, "Пузырьковая", token, () => iterations++);
+          } catch (OperationCanceledException) { }
+          var end = Process.GetCurrentProcess().TotalProcessorTime;
+          executionTimesReport["Пузырьковая"] = (end - start).TotalMilliseconds;
+          iterationReport["Пузырьковая"] = iterations;
+        }, token));
       }
 
       if (checkBoxInsertion.Checked) {
-        int[] insertionSortArray = (int[])originalArray.Clone();
+        double[] arr = (double[])originalArray.Clone();
+        long iterations = 0;
         sortingTasks.Add(Task.Run(() => {
-          TimeSpan startProcessorTime = Process.GetCurrentProcess().TotalProcessorTime;
-          VisualInsertionSort(insertionSortArray, "Вставками", animationSpeedTimeout);
-          TimeSpan endProcessorTime = Process.GetCurrentProcess().TotalProcessorTime;
-          executionTimesReport["Вставками"] = (endProcessorTime - startProcessorTime).TotalMilliseconds;
-        }));
+          var start = Process.GetCurrentProcess().TotalProcessorTime;
+          try {
+            VisualInsertionSort(arr, "Вставками", animationSpeedTimeout, token, () => iterations++);
+          } catch (OperationCanceledException) { }
+          var end = Process.GetCurrentProcess().TotalProcessorTime;
+          executionTimesReport["Вставками"] = (end - start).TotalMilliseconds;
+          iterationReport["Вставками"] = iterations;
+        }, token));
       }
 
       if (checkBoxShaker.Checked) {
-        int[] shakerSortArray = (int[])originalArray.Clone();
+        double[] arr = (double[])originalArray.Clone();
+        long iterations = 0;
         sortingTasks.Add(Task.Run(() => {
-          TimeSpan startProcessorTime = Process.GetCurrentProcess().TotalProcessorTime;
-          VisualShakerSort(shakerSortArray, "Шейкерная", animationSpeedTimeout);
-          TimeSpan endProcessorTime = Process.GetCurrentProcess().TotalProcessorTime;
-          executionTimesReport["Шейкерная"] = (endProcessorTime - startProcessorTime).TotalMilliseconds;
-        }));
+          var start = Process.GetCurrentProcess().TotalProcessorTime;
+          try {
+            VisualShakerSort(arr, "Шейкерная", animationSpeedTimeout, token, () => iterations++);
+          } catch (OperationCanceledException) { }
+          var end = Process.GetCurrentProcess().TotalProcessorTime;
+          executionTimesReport["Шейкерная"] = (end - start).TotalMilliseconds;
+          iterationReport["Шейкерная"] = iterations;
+        }, token));
       }
 
       if (checkBoxQuick.Checked) {
-        int[] quickSortArray = (int[])originalArray.Clone();
+        double[] arr = (double[])originalArray.Clone();
+        long iterations = 0;
         sortingTasks.Add(Task.Run(() => {
-          TimeSpan startProcessorTime = Process.GetCurrentProcess().TotalProcessorTime;
-          VisualQuickSort(quickSortArray, 0, quickSortArray.Length - 1, "Быстрая", animationSpeedTimeout);
-          TimeSpan endProcessorTime = Process.GetCurrentProcess().TotalProcessorTime;
-          executionTimesReport["Быстрая"] = (endProcessorTime - startProcessorTime).TotalMilliseconds;
-        }));
+          var start = Process.GetCurrentProcess().TotalProcessorTime;
+          try {
+            VisualQuickSort(arr, 0, arr.Length - 1, "Быстрая", animationSpeedTimeout, token, () => iterations++);
+          } catch (OperationCanceledException) { }
+          var end = Process.GetCurrentProcess().TotalProcessorTime;
+          executionTimesReport["Быстрая"] = (end - start).TotalMilliseconds;
+          iterationReport["Быстрая"] = iterations;
+        }, token));
       }
 
       if (checkBoxBogo.Checked) {
-        int[] bogoSortArray = (int[])originalArray.Clone();
+        double[] arr = (double[])originalArray.Clone();
+        long iterations = 0;
         sortingTasks.Add(Task.Run(() => {
-          TimeSpan startProcessorTime = Process.GetCurrentProcess().TotalProcessorTime;
-          VisualBogoSort(bogoSortArray, "BOGO Sort", animationSpeedTimeout);
-          TimeSpan endProcessorTime = Process.GetCurrentProcess().TotalProcessorTime;
-          executionTimesReport["BOGO Sort"] = (endProcessorTime - startProcessorTime).TotalMilliseconds;
-        }));
+          var start = Process.GetCurrentProcess().TotalProcessorTime;
+          try {
+            VisualBogoSort(arr, "BOGO Sort", animationSpeedTimeout, token, () => iterations++);
+          } catch (OperationCanceledException) { }
+          var end = Process.GetCurrentProcess().TotalProcessorTime;
+          executionTimesReport["BOGO Sort"] = (end - start).TotalMilliseconds;
+          iterationReport["BOGO Sort"] = iterations;
+        }, token));
       }
 
-      await Task.WhenAll(sortingTasks);
+      // Ждём завершения всех задач (или отмены)
+      try {
+        await Task.WhenAll(sortingTasks);
+      } catch (OperationCanceledException) {
+        // Отменили — это нормально
+      }
 
+      // Возвращаем интерфейс
+      _isSorting = false;
       sortingShow.Enabled = true;
       textBox1.Enabled = true;
       randomGeneric.Enabled = true;
+      stopButton.Enabled = false;
 
+      // --- ЗАПОЛНЕНИЕ ТАБЛИЦЫ РЕЗУЛЬТАТОВ ---
       dataGridViewResults.Rows.Clear();
 
       foreach (var record in executionTimesReport) {
         int rowIndex = dataGridViewResults.Rows.Add();
+
         dataGridViewResults.Rows[rowIndex].Cells[0].Value = record.Key;
         dataGridViewResults.Rows[rowIndex].Cells[1].Value = record.Value.ToString("F2");
+
+        if (iterationReport.TryGetValue(record.Key, out long iters)) {
+          dataGridViewResults.Rows[rowIndex].Cells[2].Value = iters.ToString("N0");
+        } else {
+          dataGridViewResults.Rows[rowIndex].Cells[2].Value = "—";
+        }
       }
 
-      dataGridViewResults.Sort(dataGridViewResults.Columns[1],
-        System.ComponentModel.ListSortDirection.Ascending);
-
+      // Сортируем по времени
       if (dataGridViewResults.Rows.Count > 0) {
+        dataGridViewResults.Sort(dataGridViewResults.Columns[1],
+          System.ComponentModel.ListSortDirection.Ascending);
+
+        // Красим лучший результат
         dataGridViewResults.Rows[0].DefaultCellStyle.BackColor = Color.LightGreen;
       }
     }
 
     private void dataGridViewResults_CellContentClick(object sender, DataGridViewCellEventArgs e) {
+      // Пусто
+    }
 
+    private void sortingShow_RowsAdded(object sender, DataGridViewRowsAddedEventArgs e) {
+      // Если строк (без последней «новой») стало больше 100 — обрезаем и запрещаем добавлять
+      int realRowsCount = sortingShow.AllowUserToAddRows
+        ? sortingShow.Rows.Count - 1
+        : sortingShow.Rows.Count;
+
+      if (realRowsCount >= 100) {
+        sortingShow.AllowUserToAddRows = false;
+
+        // Если пользователь умудрился добавить больше — удалим лишние
+        if (realRowsCount > 100) {
+          while (sortingShow.Rows.Count > 100) {
+            sortingShow.Rows.RemoveAt(sortingShow.Rows.Count - 1);
+          }
+          MessageBox.Show("Достигнут максимум — 100 элементов.",
+            "Ограничение", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+      }
     }
   }
 }
