@@ -30,6 +30,12 @@ namespace FistLab {
     // Флаг «идёт сортировка прямо сейчас»
     private volatile bool _isSorting = false;
 
+    // Порог, до которого разрешена анимация
+    private const int MaxAnimatedElements = 10;
+
+    // Анимировать ли текущий прогон (true, если элементов <= порога)
+    private volatile bool _animateThisRun = false;
+
     public Form1() {
       InitializeComponent();
 
@@ -175,6 +181,23 @@ namespace FistLab {
       }
     }
 
+    /// <summary>
+    /// Обновляет точку графика только если анимация разрешена.
+    /// </summary>
+    private void UpdateChartPointIfAnimated(string seriesName, int pointIndex, double newValue) {
+      if (!_animateThisRun) return;
+      UpdateChartPoint(seriesName, pointIndex, newValue);
+    }
+
+    /// <summary>
+    /// Пауза для анимации только если анимация разрешена.
+    /// </summary>
+    private void SleepIfAnimated(int ms, CancellationToken ct) {
+      if (!_animateThisRun) return;
+      ct.ThrowIfCancellationRequested();
+      Thread.Sleep(ms);
+    }
+
     // ============================================================
     // АЛГОРИТМЫ СОРТИРОВКИ С ВИЗУАЛИЗАЦИЕЙ
     // ============================================================
@@ -193,9 +216,9 @@ namespace FistLab {
             dataArray[elementIndex] = dataArray[elementIndex + 1];
             dataArray[elementIndex + 1] = temporaryValue;
 
-            UpdateChartPoint(seriesName, elementIndex, dataArray[elementIndex]);
-            UpdateChartPoint(seriesName, elementIndex + 1, dataArray[elementIndex + 1]);
-            Thread.Sleep(50);
+            UpdateChartPointIfAnimated(seriesName, elementIndex, dataArray[elementIndex]);
+            UpdateChartPointIfAnimated(seriesName, elementIndex + 1, dataArray[elementIndex + 1]);
+            SleepIfAnimated(50, ct);
           }
         }
       }
@@ -218,14 +241,14 @@ namespace FistLab {
           if (!NeedSwap(dataArray[previousIndex], keyElement)) break;
 
           dataArray[previousIndex + 1] = dataArray[previousIndex];
-          UpdateChartPoint(seriesName, previousIndex + 1, dataArray[previousIndex + 1]);
-          Thread.Sleep(sleepTimeout);
+          UpdateChartPointIfAnimated(seriesName, previousIndex + 1, dataArray[previousIndex + 1]);
+          SleepIfAnimated(sleepTimeout, ct);
           previousIndex = previousIndex - 1;
         }
 
         dataArray[previousIndex + 1] = keyElement;
-        UpdateChartPoint(seriesName, previousIndex + 1, dataArray[previousIndex + 1]);
-        Thread.Sleep(sleepTimeout);
+        UpdateChartPointIfAnimated(seriesName, previousIndex + 1, dataArray[previousIndex + 1]);
+        SleepIfAnimated(sleepTimeout, ct);
       }
     }
 
@@ -246,9 +269,9 @@ namespace FistLab {
             dataArray[scanIndex] = dataArray[scanIndex + 1];
             dataArray[scanIndex + 1] = temporaryValue;
 
-            UpdateChartPoint(seriesName, scanIndex, dataArray[scanIndex]);
-            UpdateChartPoint(seriesName, scanIndex + 1, dataArray[scanIndex + 1]);
-            Thread.Sleep(sleepTimeout);
+            UpdateChartPointIfAnimated(seriesName, scanIndex, dataArray[scanIndex]);
+            UpdateChartPointIfAnimated(seriesName, scanIndex + 1, dataArray[scanIndex + 1]);
+            SleepIfAnimated(sleepTimeout, ct);
           }
         }
         rightBoundary--;
@@ -262,9 +285,9 @@ namespace FistLab {
             dataArray[scanIndex] = dataArray[scanIndex - 1];
             dataArray[scanIndex - 1] = temporaryValue;
 
-            UpdateChartPoint(seriesName, scanIndex, dataArray[scanIndex]);
-            UpdateChartPoint(seriesName, scanIndex - 1, dataArray[scanIndex - 1]);
-            Thread.Sleep(sleepTimeout);
+            UpdateChartPointIfAnimated(seriesName, scanIndex, dataArray[scanIndex]);
+            UpdateChartPointIfAnimated(seriesName, scanIndex - 1, dataArray[scanIndex - 1]);
+            SleepIfAnimated(sleepTimeout, ct);
           }
         }
         leftBoundary++;
@@ -305,9 +328,9 @@ namespace FistLab {
           dataArray[smallerElementIndex] = dataArray[currentIndex];
           dataArray[currentIndex] = temporaryValue;
 
-          UpdateChartPoint(seriesName, smallerElementIndex, dataArray[smallerElementIndex]);
-          UpdateChartPoint(seriesName, currentIndex, dataArray[currentIndex]);
-          Thread.Sleep(sleepTimeout);
+          UpdateChartPointIfAnimated(seriesName, smallerElementIndex, dataArray[smallerElementIndex]);
+          UpdateChartPointIfAnimated(seriesName, currentIndex, dataArray[currentIndex]);
+          SleepIfAnimated(sleepTimeout, ct);
         }
       }
 
@@ -316,9 +339,9 @@ namespace FistLab {
       dataArray[finalPivotPlaceIndex] = dataArray[endingIndex];
       dataArray[endingIndex] = temporaryPivotValue;
 
-      UpdateChartPoint(seriesName, finalPivotPlaceIndex, dataArray[finalPivotPlaceIndex]);
-      UpdateChartPoint(seriesName, endingIndex, dataArray[endingIndex]);
-      Thread.Sleep(sleepTimeout);
+      UpdateChartPointIfAnimated(seriesName, finalPivotPlaceIndex, dataArray[finalPivotPlaceIndex]);
+      UpdateChartPointIfAnimated(seriesName, endingIndex, dataArray[endingIndex]);
+      SleepIfAnimated(sleepTimeout, ct);
 
       return finalPivotPlaceIndex;
     }
@@ -355,11 +378,13 @@ namespace FistLab {
           dataArray[randomIndex] = temporaryValue;
         }
 
-        for (int pointIndex = 0; pointIndex < dataArray.Length; pointIndex++) {
-          UpdateChartPoint(seriesName, pointIndex, dataArray[pointIndex]);
+        if (_animateThisRun) {
+          for (int pointIndex = 0; pointIndex < dataArray.Length; pointIndex++) {
+            UpdateChartPoint(seriesName, pointIndex, dataArray[pointIndex]);
+          }
         }
 
-        Thread.Sleep(sleepTimeout);
+        SleepIfAnimated(sleepTimeout, ct);
       }
 
       bogoTimer.Stop();
@@ -724,101 +749,52 @@ namespace FistLab {
       randomGeneric.Enabled = false;
       stopButton.Enabled = true;
 
-      InitializeChartForSelectedAlgorithms(originalArray);
-
       int animationSpeedTimeout = 50;
 
-      List<Task> sortingTasks = new List<Task>();
       var executionTimesReport = new ConcurrentDictionary<string, double>();
       var iterationReport = new ConcurrentDictionary<string, long>();
+      var sortedCopies = new ConcurrentDictionary<string, double[]>();
 
-      // --- ЗАПУСК ВСЕХ ВЫБРАННЫХ СОРТИРОВОК ---
+      // ========================================================
+      // ПРОХОД 1: «тихая» сортировка (без анимации)
+      // ========================================================
+      _animateThisRun = false;
 
-      if (checkBoxBubble.Checked) {
+      var silenceTasks = new List<Task>();
+
+      void RunSilent(string name, Action<double[], CancellationToken, Action> sortAction) {
         double[] arr = (double[])originalArray.Clone();
         long iterations = 0;
-        sortingTasks.Add(Task.Run(() => {
+        silenceTasks.Add(Task.Run(() => {
           var start = Process.GetCurrentProcess().TotalProcessorTime;
           try {
-            VisualBubbleSort(arr, "Пузырьковая", token, () => iterations++);
+            sortAction(arr, token, () => iterations++);
           } catch (OperationCanceledException) { }
           var end = Process.GetCurrentProcess().TotalProcessorTime;
-          executionTimesReport["Пузырьковая"] = (end - start).TotalMilliseconds;
-          iterationReport["Пузырьковая"] = iterations;
+          executionTimesReport[name] = (end - start).TotalMilliseconds;
+          iterationReport[name] = iterations;
+          sortedCopies[name] = arr;
         }, token));
       }
 
-      if (checkBoxInsertion.Checked) {
-        double[] arr = (double[])originalArray.Clone();
-        long iterations = 0;
-        sortingTasks.Add(Task.Run(() => {
-          var start = Process.GetCurrentProcess().TotalProcessorTime;
-          try {
-            VisualInsertionSort(arr, "Вставками", animationSpeedTimeout, token, () => iterations++);
-          } catch (OperationCanceledException) { }
-          var end = Process.GetCurrentProcess().TotalProcessorTime;
-          executionTimesReport["Вставками"] = (end - start).TotalMilliseconds;
-          iterationReport["Вставками"] = iterations;
-        }, token));
-      }
+      if (checkBoxBubble.Checked)
+        RunSilent("Пузырьковая", (a, ct, it) => VisualBubbleSort(a, "Пузырьковая", ct, it));
+      if (checkBoxInsertion.Checked)
+        RunSilent("Вставками", (a, ct, it) => VisualInsertionSort(a, "Вставками", animationSpeedTimeout, ct, it));
+      if (checkBoxShaker.Checked)
+        RunSilent("Шейкерная", (a, ct, it) => VisualShakerSort(a, "Шейкерная", animationSpeedTimeout, ct, it));
+      if (checkBoxQuick.Checked)
+        RunSilent("Быстрая", (a, ct, it) => VisualQuickSort(a, 0, a.Length - 1, "Быстрая", animationSpeedTimeout, ct, it));
+      if (checkBoxBogo.Checked)
+        RunSilent("BOGO Sort", (a, ct, it) => VisualBogoSort(a, "BOGO Sort", animationSpeedTimeout, ct, it));
 
-      if (checkBoxShaker.Checked) {
-        double[] arr = (double[])originalArray.Clone();
-        long iterations = 0;
-        sortingTasks.Add(Task.Run(() => {
-          var start = Process.GetCurrentProcess().TotalProcessorTime;
-          try {
-            VisualShakerSort(arr, "Шейкерная", animationSpeedTimeout, token, () => iterations++);
-          } catch (OperationCanceledException) { }
-          var end = Process.GetCurrentProcess().TotalProcessorTime;
-          executionTimesReport["Шейкерная"] = (end - start).TotalMilliseconds;
-          iterationReport["Шейкерная"] = iterations;
-        }, token));
-      }
-
-      if (checkBoxQuick.Checked) {
-        double[] arr = (double[])originalArray.Clone();
-        long iterations = 0;
-        sortingTasks.Add(Task.Run(() => {
-          var start = Process.GetCurrentProcess().TotalProcessorTime;
-          try {
-            VisualQuickSort(arr, 0, arr.Length - 1, "Быстрая", animationSpeedTimeout, token, () => iterations++);
-          } catch (OperationCanceledException) { }
-          var end = Process.GetCurrentProcess().TotalProcessorTime;
-          executionTimesReport["Быстрая"] = (end - start).TotalMilliseconds;
-          iterationReport["Быстрая"] = iterations;
-        }, token));
-      }
-
-      if (checkBoxBogo.Checked) {
-        double[] arr = (double[])originalArray.Clone();
-        long iterations = 0;
-        sortingTasks.Add(Task.Run(() => {
-          var start = Process.GetCurrentProcess().TotalProcessorTime;
-          try {
-            VisualBogoSort(arr, "BOGO Sort", animationSpeedTimeout, token, () => iterations++);
-          } catch (OperationCanceledException) { }
-          var end = Process.GetCurrentProcess().TotalProcessorTime;
-          executionTimesReport["BOGO Sort"] = (end - start).TotalMilliseconds;
-          iterationReport["BOGO Sort"] = iterations;
-        }, token));
-      }
-
-      // Ждём завершения всех задач (или отмены)
       try {
-        await Task.WhenAll(sortingTasks);
-      } catch (OperationCanceledException) {
-        // Отменили — это нормально
-      }
+        await Task.WhenAll(silenceTasks);
+      } catch (OperationCanceledException) { }
 
-      // Возвращаем интерфейс
-      _isSorting = false;
-      sortingShow.Enabled = true;
-      textBox1.Enabled = true;
-      randomGeneric.Enabled = true;
-      stopButton.Enabled = false;
-
-      // --- ЗАПОЛНЕНИЕ ТАБЛИЦЫ РЕЗУЛЬТАТОВ ---
+      // ========================================================
+      // ЗАПОЛНЕНИЕ ТАБЛИЦЫ РЕЗУЛЬТАТОВ (ДО отрисовки!)
+      // ========================================================
       dataGridViewResults.Rows.Clear();
 
       foreach (var record in executionTimesReport) {
@@ -834,14 +810,68 @@ namespace FistLab {
         }
       }
 
-      // Сортируем по времени
       if (dataGridViewResults.Rows.Count > 0) {
         dataGridViewResults.Sort(dataGridViewResults.Columns[1],
           System.ComponentModel.ListSortDirection.Ascending);
 
-        // Красим лучший результат
         dataGridViewResults.Rows[0].DefaultCellStyle.BackColor = Color.LightGreen;
       }
+
+      // ========================================================
+      // ПРОХОД 2: анимация (только если элементов <= 10)
+      // ========================================================
+      bool animationCancelled = token.IsCancellationRequested;
+
+      if (!animationCancelled && originalArray.Length <= MaxAnimatedElements) {
+        _animateThisRun = true;
+
+        // Готовим график на ИСХОДНЫХ данных — анимация «проиграет» сортировку заново
+        InitializeChartForSelectedAlgorithms(originalArray);
+
+        var animationTasks = new List<Task>();
+
+        foreach (var kv in sortedCopies.ToList()) {
+          string name = kv.Key;
+
+          // BOGO не анимируем — слишком долго/случайно
+          if (name == "BOGO Sort") continue;
+
+          double[] animArr = (double[])originalArray.Clone();
+
+          animationTasks.Add(Task.Run(() => {
+            try {
+              switch (name) {
+                case "Пузырьковая":
+                  VisualBubbleSort(animArr, name, token, () => { });
+                  break;
+                case "Вставками":
+                  VisualInsertionSort(animArr, name, animationSpeedTimeout, token, () => { });
+                  break;
+                case "Шейкерная":
+                  VisualShakerSort(animArr, name, animationSpeedTimeout, token, () => { });
+                  break;
+                case "Быстрая":
+                  VisualQuickSort(animArr, 0, animArr.Length - 1, name, animationSpeedTimeout, token, () => { });
+                  break;
+              }
+            } catch (OperationCanceledException) { }
+          }, token));
+        }
+
+        try {
+          await Task.WhenAll(animationTasks);
+        } catch (OperationCanceledException) { }
+      }
+
+      // ========================================================
+      // Возврат интерфейса
+      // ========================================================
+      _isSorting = false;
+      _animateThisRun = false;
+      sortingShow.Enabled = true;
+      textBox1.Enabled = true;
+      randomGeneric.Enabled = true;
+      stopButton.Enabled = false;
     }
 
     private void dataGridViewResults_CellContentClick(object sender, DataGridViewCellEventArgs e) {

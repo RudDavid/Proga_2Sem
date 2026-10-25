@@ -1,7 +1,7 @@
 ﻿using System;
 using System.Windows.Forms;
 using System.Windows.Forms.DataVisualization.Charting;
-
+//(27 - 18*x + 2*Pow(x, 2))*Pow(2.7182, (-x/3))
 namespace FistLab {
   public partial class Form3 : Form {
     private readonly MathSolver _solver = new MathSolver();
@@ -73,7 +73,7 @@ namespace FistLab {
         _lastRootY = result.RootValue;
 
         // Вывод
-        string format = "F" + (precisionDigits + 2);
+        string format = "F" + (precisionDigits);
         lblResult.Text =
             "Корень уравнения: x = " + result.Root.ToString(format) + "\n" +
             "f(x) = " + result.RootValue.ToString(format) + "\n" +
