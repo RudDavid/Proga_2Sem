@@ -23,7 +23,7 @@
     /// the contents of this method with the code editor.
     /// </summary>
     private void InitializeComponent() {
-      System.Windows.Forms.DataVisualization.Charting.Series series3 = new System.Windows.Forms.DataVisualization.Charting.Series();
+      System.Windows.Forms.DataVisualization.Charting.Series series2 = new System.Windows.Forms.DataVisualization.Charting.Series();
       this.menuStrip1 = new System.Windows.Forms.MenuStrip();
       this.управлениеToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
       this.построитьГрафикToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
@@ -39,6 +39,7 @@
       this.txtFunc = new System.Windows.Forms.TextBox();
       this.txtE = new System.Windows.Forms.NumericUpDown();
       this.chart1 = new System.Windows.Forms.DataVisualization.Charting.Chart();
+      this.label5 = new System.Windows.Forms.Label();
       this.menuStrip1.SuspendLayout();
       ((System.ComponentModel.ISupportInitialize)(this.txtE)).BeginInit();
       ((System.ComponentModel.ISupportInitialize)(this.chart1)).BeginInit();
@@ -67,21 +68,21 @@
       // построитьГрафикToolStripMenuItem
       // 
       this.построитьГрафикToolStripMenuItem.Name = "построитьГрафикToolStripMenuItem";
-      this.построитьГрафикToolStripMenuItem.Size = new System.Drawing.Size(180, 22);
+      this.построитьГрафикToolStripMenuItem.Size = new System.Drawing.Size(176, 22);
       this.построитьГрафикToolStripMenuItem.Text = "Построить график";
       this.построитьГрафикToolStripMenuItem.Click += new System.EventHandler(this.построитьГрафикToolStripMenuItem_Click);
       // 
       // рассчитатьToolStripMenuItem
       // 
       this.рассчитатьToolStripMenuItem.Name = "рассчитатьToolStripMenuItem";
-      this.рассчитатьToolStripMenuItem.Size = new System.Drawing.Size(180, 22);
+      this.рассчитатьToolStripMenuItem.Size = new System.Drawing.Size(176, 22);
       this.рассчитатьToolStripMenuItem.Text = "Рассчитать";
       this.рассчитатьToolStripMenuItem.Click += new System.EventHandler(this.calculateToolStripMenuItem_Click);
       // 
       // очиститьToolStripMenuItem
       // 
       this.очиститьToolStripMenuItem.Name = "очиститьToolStripMenuItem";
-      this.очиститьToolStripMenuItem.Size = new System.Drawing.Size(180, 22);
+      this.очиститьToolStripMenuItem.Size = new System.Drawing.Size(176, 22);
       this.очиститьToolStripMenuItem.Text = "Очистить";
       this.очиститьToolStripMenuItem.Click += new System.EventHandler(this.clearToolStripMenuItem_Click);
       // 
@@ -167,17 +168,28 @@
       // 
       this.chart1.Location = new System.Drawing.Point(376, 71);
       this.chart1.Name = "chart1";
-      series3.Name = "Series1";
-      this.chart1.Series.Add(series3);
+      series2.Name = "Series1";
+      this.chart1.Series.Add(series2);
       this.chart1.Size = new System.Drawing.Size(401, 300);
       this.chart1.TabIndex = 4;
       this.chart1.Text = "chart1";
+      // 
+      // label5
+      // 
+      this.label5.AutoSize = true;
+      this.label5.ForeColor = System.Drawing.SystemColors.AppWorkspace;
+      this.label5.Location = new System.Drawing.Point(59, 234);
+      this.label5.Name = "label5";
+      this.label5.Size = new System.Drawing.Size(181, 13);
+      this.label5.TabIndex = 5;
+      this.label5.Text = "количество знаков после запятой";
       // 
       // Form3
       // 
       this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
       this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
       this.ClientSize = new System.Drawing.Size(800, 450);
+      this.Controls.Add(this.label5);
       this.Controls.Add(this.chart1);
       this.Controls.Add(this.txtE);
       this.Controls.Add(this.txtFunc);
@@ -218,5 +230,6 @@
     private System.Windows.Forms.ToolStripMenuItem построитьГрафикToolStripMenuItem;
     private System.Windows.Forms.ToolStripMenuItem рассчитатьToolStripMenuItem;
     private System.Windows.Forms.ToolStripMenuItem очиститьToolStripMenuItem;
+    private System.Windows.Forms.Label label5;
   }
 }

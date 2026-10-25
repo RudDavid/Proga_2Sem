@@ -112,36 +112,75 @@ namespace FistLab {
     // ============================================================
     // ОТРИСОВКА ГРАФИКА (вызывается из "Построить график")
     // ============================================================
-    private void PlotGraph(string funcStr, double a, double b) {
-      chart1.Series["Function"].Points.Clear();
-      chart1.Series["RootPoint"].Points.Clear();
+  private void PlotGraph(string funcStr, double a, double b) {
+    chart1.Series["Function"].Points.Clear();
+    chart1.Series["RootPoint"].Points.Clear();
 
-      // Расширяем диапазон, чтобы был виден контекст
-      double delta = (b - a) * 0.3;
-      double minX = a - delta;
-      double maxX = b + delta;
+    // Расширяем диапазон
+    double delta = (b - a) * 0.1; // Можно уменьшить, если нужно
+    double minX = a - delta;
+    double maxX = b + delta;
+    if (Math.Abs(maxX - minX) < 0.1) { minX -= 1; maxX += 1; }
 
-      if (Math.Abs(maxX - minX) < 0.1) { minX -= 1; maxX += 1; }
+    int pointsCount = 5000; 
+    double step = (maxX - minX) / pointsCount;
 
-      double step = (maxX - minX) / 500;
-      const double yLimit = 1e6;
+    // Ограничение по Y. Если функция выше/ниже — считаем это разрывом.
+    const double yLimit = 10; // Уменьшил до 10, чтобы график был более "классическим"
 
-      for (double x = minX; x <= maxX; x += step) {
+    bool isInGap = false; // Флаг, что мы находимся в зоне разрыва
+
+    for (int i = 0; i <= pointsCount; i++) {
+        double x = minX + i * step;
+        
         try {
-          double y = _solver.CalculateFunction(funcStr, x);
-          if (double.IsNaN(y) || double.IsInfinity(y) || Math.Abs(y) > yLimit)
-            continue;
-          chart1.Series["Function"].Points.AddXY(x, y);
-        } catch { }
-      }
+            double y = _solver.CalculateFunction(funcStr, x);
 
-      // Если корень был найден ранее — рисуем его
-      if (_lastRootX.HasValue && _lastRootY.HasValue) {
-        chart1.Series["RootPoint"].Points.AddXY(_lastRootX.Value, _lastRootY.Value);
-      }
+            // Проверяем, является ли точка "нормальной"
+            // (не NaN, не бесконечность и не выходит за наши рамки yLimit)
+            bool isValid = !double.IsNaN(y) && !double.IsInfinity(y) && Math.Abs(y) <= yLimit;
 
-      chart1.ChartAreas[0].RecalculateAxesScale();
+            if (isValid) {
+                // Если мы только что вышли из разрыва, добавляем пустую точку,
+                // чтобы начать новую линию
+                if (isInGap) {
+                    chart1.Series["Function"].Points.AddXY(x, double.NaN);
+                    isInGap = false;
+                }
+                
+                // Добавляем нормальную точку
+                chart1.Series["Function"].Points.AddXY(x, y);
+            } 
+            else {
+                // Если точка невалидна (улетела в бесконечность или за yLimit)
+                // и мы еще не в разрыве, добавляем пустую точку, чтобы оборвать линию
+                if (!isInGap) {
+                    chart1.Series["Function"].Points.AddXY(x, double.NaN);
+                    // ДОБАВЛЯЕМ ВТОРУЮ ПУСТУЮ ТОЧКУ ДЛЯ НАДЕЖНОСТИ
+                    chart1.Series["Function"].Points.AddXY(x, double.NaN);
+                    isInGap = true;
+                }
+            }
+        } 
+        catch { 
+            // При ошибке вычисления тоже ставим разрыв
+            if (!isInGap) {
+                chart1.Series["Function"].Points.AddXY(x, double.NaN);
+                chart1.Series["Function"].Points.AddXY(x, double.NaN);
+                isInGap = true;
+            }
+        }
     }
+
+    // Рисуем корень, если он есть
+    if (_lastRootX.HasValue && _lastRootY.HasValue) {
+        if (Math.Abs(_lastRootY.Value) <= yLimit) {
+            chart1.Series["RootPoint"].Points.AddXY(_lastRootX.Value, _lastRootY.Value);
+        }
+    }
+
+    chart1.ChartAreas[0].RecalculateAxesScale();
+}
 
     // ============================================================
     // БЛОК 4: ОЧИСТИТЬ
